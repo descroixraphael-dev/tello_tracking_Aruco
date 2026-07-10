@@ -1,3 +1,4 @@
+
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist, Vector3Stamped
@@ -19,6 +20,7 @@ import time
 OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
 OFFSET_NORMAL_M = 0.45  # desired height above the marker (m)
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Tracking-loss recovery timeline. No ML-based re-detection here -- ArUco
 #  detection is a simple per-frame binary hit/miss, so recovery is a scripted,
@@ -35,6 +37,7 @@ LOSS_HOLD_SEC   = 2.0
 LOSS_SEARCH_SEC = 5.0
 LOSS_ABORT_SEC  = 12.0
 SEARCH_YAW_RATE = 0.20 # Twist.angular.z while scanning -- keep conservative, this is untested
+
 
 
 def quaternion_to_rotation_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
@@ -207,7 +210,9 @@ class SingleAxisTestController(Node):
         self.pose_sub  = self.create_subscription(PoseStamped, '/tello/marker_pose', self.pose_callback, 10)
         self.cmd_pub   = self.create_publisher(Twist, '/cmd_vel', 10)
         self.takeoff_pub = self.create_publisher(Empty, '/tello/takeoff', 10)
+
         self.land_pub  = self.create_publisher(Empty, '/tello/land', 10)
+
         # UKF's continuous-valued speed estimate, for comparing against the
         # integer-quantized /tello/velocity in PlotJuggler. UKF speed state is
         # metres/second (marker/vision frame); Tello telemetry is cm/s -- the
@@ -228,7 +233,11 @@ class SingleAxisTestController(Node):
         # per-axis motor/RC deadband (smallest cmd_vel that produces visible
         # motion) and set it explicitly once known — see PIDController.compute().
         self.pid_x    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
+
         self.pid_y    = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.15)
+
+        self.pid_y    = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.10)
+
         self.pid_z    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.0)
         self.pid_yaw  = PIDController(kp=0.382,  ki=0.0637,  kd=0.100,  max_out=0.90, min_effective_out=0.10)
         self._all_pids = [self.pid_x, self.pid_y, self.pid_z, self.pid_yaw]
@@ -238,7 +247,10 @@ class SingleAxisTestController(Node):
         self.latest_goal = None
         self.last_measurement_time = self.get_clock().now()
         self.is_tracking_lost = True
+
         self._recovery_state = 'TRACKING'  # TRACKING | HOLD | SEARCHING | ABORTED
+
+
         self.current_zone = 'CENTER'
         self._locked_marker_id = None
 
@@ -314,6 +326,7 @@ class SingleAxisTestController(Node):
         yaw_rate_estimate.vector.z = turn_rate_rad_s * self.RAD_TO_DEG
         self.yaw_rate_estimate_pub.publish(yaw_rate_estimate)
 
+
     def _handle_tracking_loss(self, time_since_last_meas: float) -> bool:
         """
         Tiered response to marker dropout, driven purely by elapsed time
@@ -359,6 +372,7 @@ class SingleAxisTestController(Node):
         self._recovery_state = 'TRACKING'
         return False
 
+
     def control_loop(self):
         if self.latest_goal is None:
             self.cmd_pub.publish(Twist())
@@ -370,8 +384,22 @@ class SingleAxisTestController(Node):
         time_since_last_meas = (now - self.last_measurement_time).nanoseconds / 1e9
         dt = 0.05
 
+
         if self._handle_tracking_loss(time_since_last_meas):
             return
+
+
+        if time_since_last_meas > 5.0:
+            self.get_logger().error("Target lost for > 5.0 seconds. Safety halting drone.")
+            self.stop_drone()
+            return
+
+        #if time_since_last_meas > 1.0:
+         #   self.is_tracking_lost = True
+          #  self.ukf.predict(dt)
+           # self.latest_goal = self.ukf.x[0:3]
+            #self.current_zone = 'CENTER'
+
 
         err_x = self.latest_goal[0]
         err_y = self.latest_goal[1]
@@ -405,6 +433,7 @@ class SingleAxisTestController(Node):
         #self.pid_yaw.reset()
 
         # ── Z AXIS (altitude, pid_y, err_y) ─────────────────────────────────
+
         twist.linear.x  = 0.0
         twist.linear.y  = 0.0
         twist.linear.z  = -self.pid_y.compute(err_y, dt)
@@ -412,6 +441,15 @@ class SingleAxisTestController(Node):
         self.pid_x.reset()
         self.pid_z.reset()
         self.pid_yaw.reset()
+
+        #twist.linear.x  = 0.0
+        #twist.linear.y  = 0.0
+        twist.linear.z  = -self.pid_y.compute(err_y, dt)
+        #twist.angular.z = 0.0
+        #self.pid_x.reset()
+        #self.pid_z.reset()
+        #self.pid_yaw.reset()
+
 
         # ── YAW AXIS (rotation, pid_yaw, err_tangential/err_radial) ─────────
         #marker_heading = self.ukf.x[4]
