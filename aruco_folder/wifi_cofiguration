@@ -1,0 +1,406 @@
+================================================================================
+   COMPLETE GUIDE: CONNECTING ONE DESKTOP TO 2 WI-FI NETWORKS FOR ROS 2
+================================================================================
+
+================================================================================
+PART 1 — UNDERSTANDING THE SETUP
+================================================================================
+
+Before touching anything, understand what we're building:
+
+    Your Desktop PC
+    ├── Wi-Fi Adapter #1 (built-in)   ──────► Network A (e.g., Tello drone)
+    └── Wi-Fi Adapter #2 (USB dongle) ──────► Network B (e.g., second robot)
+
+You need TWO physical Wi-Fi adapters:
+  - One built-in + one USB dongle, OR
+  - Two USB dongles
+
+One adapter cannot reliably connect to two networks simultaneously.
+
+
+================================================================================
+PART 2 — HARDWARE REQUIREMENTS
+================================================================================
+
+What you need:
+  [OK] Your desktop PC (with one built-in Wi-Fi or a PCIe card)
+  [OK] 1x USB Wi-Fi adapter (dongle) — e.g., TP-Link TL-WN823N or any dual-band
+  [OK] Two separate Wi-Fi networks/routers (or two devices broadcasting hotspots)
+
+NOTE: If your desktop has NO built-in Wi-Fi, you need 2x USB Wi-Fi dongles.
+
+
+================================================================================
+PART 3 — LINUX SETUP (Ubuntu 22.04 / ROS 2 Humble assumed)
+================================================================================
+
+------------------------------------------------------------------------
+Step 1 — Plug in your USB Wi-Fi dongle
+------------------------------------------------------------------------
+
+Check that the system sees both adapters:
+
+    ip link show
+
+YOUR INTERFACES (already confirmed):
+  - drone_a   (built-in, also known as wlp0s20f3 / wls5f3)
+  - drone_b   (USB dongle, MAC: 28:87:ba:78:6c:3c)
+
+Confirm with:
+
+    iwconfig
+
+------------------------------------------------------------------------
+Step 2 — Install NetworkManager tools
+------------------------------------------------------------------------
+
+    sudo apt update
+    sudo apt install network-manager net-tools wireless-tools
+
+------------------------------------------------------------------------
+Step 3 — Connect each adapter to its own network
+------------------------------------------------------------------------
+
+Connect drone_a to its network (Device A):
+
+    nmcli device wifi connect "SSID_DRONE_A" password "password_A" ifname drone_a
+
+Connect drone_b to its network (Device B):
+
+    nmcli device wifi connect "SSID_DRONE_B" password "password_B" ifname drone_b
+
+Replace SSID_DRONE_A, SSID_DRONE_B, password_A, password_B with your actual values.
+
+Verify both are connected:
+
+    nmcli device status
+
+Both interfaces should show status: connected
+
+------------------------------------------------------------------------
+Step 4 — Check assigned IP addresses
+------------------------------------------------------------------------
+
+    ip addr show drone_a
+    ip addr show drone_b
+
+YOUR IPs (already confirmed):
+  drone_a:  192.168.10.2    (network: 192.168.10.0/24,  gateway: 192.168.10.1)
+  drone_b:  192.168.8.163   (network: 192.168.8.0/24,   gateway: 192.168.8.1)
+
+
+================================================================================
+PART 4 — ROUTING
+================================================================================
+
+NOTE: In your specific case, separate routing tables are NOT needed.
+Your two networks are on different subnets (192.168.10.x vs 192.168.8.x),
+so Linux already knows which interface to use for each device.
+
+YOUR CONFIRMED ROUTING TABLE (from ip route show):
+
+    default via 192.168.8.1  dev drone_b  metric 601     ← primary default (drone_b)
+    default via 192.168.10.1 dev drone_a  metric 20602   ← fallback default (drone_a)
+    192.168.8.0/24  dev drone_b  src 192.168.8.163       ← drone_b traffic
+    192.168.10.0/24 dev drone_a  src 192.168.10.2        ← drone_a traffic
+
+This means:
+  - Traffic to 192.168.10.x automatically goes out through drone_a  [OK]
+  - Traffic to 192.168.8.x  automatically goes out through drone_b  [OK]
+
+------------------------------------------------------------------------
+Verification — ping each device's gateway to confirm routing works
+------------------------------------------------------------------------
+
+    ping -I drone_a 192.168.10.1    # ping drone_a gateway
+    ping -I drone_b 192.168.8.1     # ping drone_b gateway
+
+If both reply, routing is working correctly. Proceed to Part 5.
+
+------------------------------------------------------------------------
+IMPORTANT — drone_a IP lease warning
+------------------------------------------------------------------------
+
+‼️Your drone_a IP (192.168.10.2) has a limited DHCP lease (~1 hour at setup time).
+If it changes after reconnecting, your FastDDS XML config will break.
+
+To fix: reserve the IP in your router/device by binding MAC c8:58:c0:39:4e:05
+to 192.168.10.2 in its DHCP settings.
+
+
+================================================================================
+PART 5 — ROS 2 CONFIGURATION
+================================================================================
+
+YOUR NETWORK SUMMARY (confirmed):
+  drone_a  →  IP: 192.168.10.2    gateway: 192.168.10.1   (Tello / Device A)
+  drone_b  →  IP: 192.168.8.163   gateway: 192.168.8.1    (Device B)
+
+------------------------------------------------------------------------
+Understanding ROS 2 networking
+------------------------------------------------------------------------
+
+ROS 2 uses DDS (Data Distribution Service) for communication.
+By default, it uses multicast UDP which may go out the wrong interface.
+You need to bind each ROS 2 instance/node to the correct interface.
+
+------------------------------------------------------------------------
+Step 1 — Set ROS_DOMAIN_ID per network
+------------------------------------------------------------------------
+‼️more details
+ROS 2 uses domain IDs to separate communication spaces.
+Use DIFFERENT domain IDs for each network:
+
+    # For nodes communicating on drone_a (192.168.10.x network)
+    export ROS_DOMAIN_ID=10
+
+    # For nodes communicating on drone_b (192.168.8.x network)
+    export ROS_DOMAIN_ID=20
+
+Nodes with the same ROS_DOMAIN_ID on the same network talk to each other.
+Different IDs are fully isolated.
+
+------------------------------------------------------------------------
+Step 2 — Create FastDDS XML config for drone_a
+------------------------------------------------------------------------
+
+    nano ~/fastdds_drone_a.xml
+
+Paste this content (binds DDS to your drone_a IP: 192.168.10.2):
+
+    <?xml version="1.0" encoding="UTF-8" ?>
+    <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+      <transport_descriptors>
+        <transport_descriptor>
+          <transport_id>custom_udp_drone_a</transport_id>
+          <type>UDPv4</type>
+          <interfaceWhiteList>
+            <address>192.168.10.2</address>
+          </interfaceWhiteList>
+        </transport_descriptor>
+      </transport_descriptors>
+      <participant profile_name="drone_a_participant" is_default_profile="true">
+        <rtps>
+          <userTransports>
+            <transport_id>custom_udp_drone_a</transport_id>
+          </userTransports>
+          <useBuiltinTransports>false</useBuiltinTransports>
+        </rtps>
+      </participant>
+    </profiles>
+
+------------------------------------------------------------------------
+Step 3 — Create FastDDS XML config for drone_b
+------------------------------------------------------------------------
+
+    nano ~/fastdds_drone_b.xml
+
+Paste this content (binds DDS to your drone_b IP: 192.168.8.163):
+
+    <?xml version="1.0" encoding="UTF-8" ?>
+    <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+      <transport_descriptors>
+        <transport_descriptor>
+          <transport_id>custom_udp_drone_b</transport_id>
+          <type>UDPv4</type>
+          <interfaceWhiteList>
+            <address>192.168.8.163</address>
+          </interfaceWhiteList>
+        </transport_descriptor>
+      </transport_descriptors>
+      <participant profile_name="drone_b_participant" is_default_profile="true">
+        <rtps>
+          <userTransports>
+            <transport_id>custom_udp_drone_b</transport_id>
+          </userTransports>
+          <useBuiltinTransports>false</useBuiltinTransports>
+        </rtps>
+      </participant>
+    </profiles>
+
+------------------------------------------------------------------------
+Step 4 — Launch nodes bound to specific interfaces
+------------------------------------------------------------------------
+
+Terminal 1 — Nodes for drone_a (192.168.10.x network):
+
+    export ROS_DOMAIN_ID=10
+    export FASTRTPS_DEFAULT_PROFILES_FILE=~/fastdds_drone_a.xml
+    ros2 run your_package your_node_for_drone_a
+
+Terminal 2 — Nodes for drone_b (192.168.8.x network):
+
+    export ROS_DOMAIN_ID=20
+    export FASTRTPS_DEFAULT_PROFILES_FILE=~/fastdds_drone_b.xml
+    ros2 run your_package your_node_for_drone_b
+
+
+================================================================================
+PART 6 — SENDING DIFFERENT COMMANDS TO EACH DEVICE
+================================================================================
+
+------------------------------------------------------------------------
+Recommended architecture
+------------------------------------------------------------------------
+
+                    +-------------------------+
+                    |    Master Controller    |
+                    |   (Your ROS 2 node)     |
+                    +--------+--------+-------+
+                             |        |
+              +--------------+        +--------------+
+              v                                       v
+   /drone_a/cmd_vel                       /drone_b/cmd_vel
+   (Domain ID 10)                         (Domain ID 20)
+   (FastDDS -> drone_a)                   (FastDDS -> drone_b)
+   (192.168.10.2)                         (192.168.8.163)
+              |                                       |
+              v                                       v
+        [Device A]                             [Device B]
+      192.168.10.x                           192.168.8.x
+
+------------------------------------------------------------------------
+Example: a dual-device commander node (dual_commander.py)
+------------------------------------------------------------------------
+
+    import rclpy
+    from rclpy.node import Node
+    from geometry_msgs.msg import Twist
+
+    class DualCommander(Node):
+        def __init__(self):
+            super().__init__('dual_commander')
+
+            # Publisher for drone_a (192.168.10.x network)
+            # Run this node with: ROS_DOMAIN_ID=10 + fastdds_drone_a.xml
+            self.pub_a = self.create_publisher(Twist, '/drone_a/cmd_vel', 10)
+
+            self.timer = self.create_timer(0.1, self.send_commands)
+
+        def send_commands(self):
+            cmd_a = Twist()
+            cmd_a.linear.x = 0.5   # Move forward
+
+            self.pub_a.publish(cmd_a)
+            self.get_logger().info('Sent command to drone_a (192.168.10.x)')
+
+    def main():
+        rclpy.init()
+        node = DualCommander()
+        rclpy.spin(node)
+
+    if __name__ == '__main__':
+        main()
+
+Run a separate identical node (new terminal, Domain 20 + fastdds_drone_b.xml) for drone_b.
+
+------------------------------------------------------------------------
+Alternative: use a domain bridge node
+------------------------------------------------------------------------
+
+Install the domain bridge:
+
+    sudo apt install ros-humble-domain-bridge
+
+Create bridge.yaml:
+
+    topics:
+      /drone_a/cmd_vel:
+        type: geometry_msgs/msg/Twist
+        from_domain: 0      # Your internal domain
+        to_domain: 10       # drone_a domain (192.168.10.x)
+
+      /drone_b/cmd_vel:
+        type: geometry_msgs/msg/Twist
+        from_domain: 0
+        to_domain: 20       # drone_b domain (192.168.8.x)
+
+Run the bridge:
+
+    ros2 run domain_bridge domain_bridge bridge.yaml
+
+
+================================================================================
+PART 7 — TESTING & VERIFICATION CHECKLIST
+================================================================================
+
+1. Both interfaces connected?
+       nmcli device status
+       (look for drone_a and drone_b both showing "connected")
+
+2. Both have IP addresses?
+       ip addr show drone_a    # expect: 192.168.10.2
+       ip addr show drone_b    # expect: 192.168.8.163
+
+3. Can you ping each device's gateway?
+       ping -I drone_a 192.168.10.1   # drone_a gateway
+       ping -I drone_b 192.168.8.1    # drone_b gateway
+
+4. Can you ping each actual device?
+       ping -I drone_a 192.168.10.xxx   # replace xxx with your Device A IP
+       ping -I drone_b 192.168.8.xxx    # replace xxx with your Device B IP
+
+5. ROS domain isolation working?
+       ROS_DOMAIN_ID=10 ros2 topic list   # should show drone_a topics only
+       ROS_DOMAIN_ID=20 ros2 topic list   # should show drone_b topics only
+
+6. Topics visible on correct domain?
+       ROS_DOMAIN_ID=10 ros2 topic echo /drone_a/cmd_vel
+       ROS_DOMAIN_ID=20 ros2 topic echo /drone_b/cmd_vel
+
+
+================================================================================
+PART 8 — COMMON PITFALLS
+================================================================================
+
+  PROBLEM                          | CAUSE                          | FIX
+  ---------------------------------|--------------------------------|-----------------------------
+  Both devices on same topic       | Same ROS_DOMAIN_ID             | Use different domain IDs
+  Commands go to wrong device      | Wrong FastDDS XML config loaded | Check FASTRTPS_DEFAULT_...
+  Can ping one device but not other| Routing table issue            | Redo Part 4 routing steps
+  USB Wi-Fi drops connection       | Power management               | sudo iwconfig wlan1 power off
+  Routes lost after reboot         | Not persistent                 | Add crontab entry (Part 4)
+  ROS nodes can't find each other  | DDS multicast on wrong iface   | Whitelist IP in FastDDS XML
+
+
+================================================================================
+PART 9 — QUICK REFERENCE: SHELL ALIASES
+================================================================================
+
+Add these to ~/.bashrc for convenience:
+
+    # Activate Network A environment for ROS 2
+    alias ros-net-a='export ROS_DOMAIN_ID=10 && export FASTRTPS_DEFAULT_PROFILES_FILE=~/fastdds_net_a.xml'
+
+    # Activate Network B environment for ROS 2
+    alias ros-net-b='export ROS_DOMAIN_ID=20 && export FASTRTPS_DEFAULT_PROFILES_FILE=~/fastdds_net_b.xml'
+
+    # Quick check of both Wi-Fi interfaces
+    alias check-wifi='nmcli device status && ip addr show wlan0 && ip addr show wlan1'
+
+Then reload your shell:
+
+    source ~/.bashrc
+
+Usage:
+    ros-net-a   (then run your Device A nodes)
+    ros-net-b   (then run your Device B nodes)
+    
+    
+    
+
+
+
+================================================================================
+END OF GUIDE
+================================================================================
+ask question:
+===
+ailed with retcode -1
+1783339248.925639 [2]        tev: ddsi_udp_conn_write to udp/239.255.0.1:7900 f
+detail more part 5==
+
+
+
+
