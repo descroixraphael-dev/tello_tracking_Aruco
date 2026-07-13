@@ -1,44 +1,76 @@
-
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, Twist, Vector3Stamped
-from std_msgs.msg import Empty
-import numpy as np
-from scipy.linalg import cholesky
 import time
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stand-off offset (metres), expressed in the MARKER's own local frame.
-#  Same convention as orbit_nav.py / ukf_navigation.py:
-#  Marker flat on floor facing up:
-#    +Z  →  pointing straight up into the ceiling.
-#    -Y  →  pointing backward along the ground towards the drone's parking spot.
-#  Applying this through the marker's measured rotation matrix means the
-#  drone holds 1m behind / 45cm above the marker regardless of how the
-#  marker itself is rotated on the floor.
-# ─────────────────────────────────────────────────────────────────────────────
+import numpy as np
+import rclpy
+from geometry_msgs.msg import PoseStamped, Twist, Vector3Stamped
+from rclpy.node import Node
+from scipy.linalg import cholesky
+from std_msgs.msg import Empty
+
+# ═════════════════════════════════════════════════════════════════════════
+#  SINGLE-AXIS TEST CONTROLLER
+#
+#  Only ONE of x / y / z / yaw is ever commanded — the rest are forced to
+#  zero. This isolates one PID at a time for tuning (e.g. checking the
+#  pid_y altitude-hold fix in isolation) without interaction from the
+#  other axes or the coarse-yaw zone logic.
+#
+#  FLIGHT SEQUENCE:
+#    1. ALTITUDE_CALIBRATE — pid_y alone drives to the target height, once,
+#       like a calibration step. Once settled, altitude is left to the
+#       Tello's own onboard hover/barometer hold and is never re-driven.
+#    2. AXIS_TEST — whichever single-axis block below is uncommented runs,
+#       with altitude no longer actively controlled by this node.
+#
+#  HOW TO SWITCH AXES:
+#  Exactly one block in control_loop()'s AXIS_TEST section should be
+#  UNCOMMENTED. Comment out the active block and uncomment a different one
+#  to switch. Everything else (UKF, locking, takeoff, safety halt, altitude
+#  calibration) stays the same regardless of which axis is under test.
+# ═════════════════════════════════════════════════════════════════════════
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  CONFIGURATION
+# ─────────────────────────────────────────────────────────────────────────
+
+# Stand-off offset (metres), expressed in the MARKER's own local frame.
+# Same convention as orbit_nav.py / ukf_navigation.py:
+#   Marker flat on floor facing up:
+#     +Z  →  pointing straight up into the ceiling.
+#     -Y  →  pointing backward along the ground towards the drone's parking spot.
+# Applying this through the marker's measured rotation matrix means the
+# drone holds 1m behind / 45cm above the marker regardless of how the
+# marker itself is rotated on the floor.
 OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
 OFFSET_NORMAL_M = 0.45  # desired height above the marker (m)
 
+# Altitude-calibration settle criteria (see FLIGHT SEQUENCE above).
+#   ALTITUDE_SETTLE_TOL_M   : how close err_y must get to call it "settled" (m)
+#   ALTITUDE_SETTLE_HOLD_SEC: must stay within tolerance this long (debounce,
+#                             so a single noisy sample doesn't trigger early)
+ALTITUDE_SETTLE_TOL_M    = 0.10
+ALTITUDE_SETTLE_HOLD_SEC = 1.0
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Tracking-loss recovery timeline. No ML-based re-detection here -- ArUco
-#  detection is a simple per-frame binary hit/miss, so recovery is a scripted,
-#  timer-driven state machine rather than anything adaptive:
-#    < LOSS_HOLD_SEC                     : normal tracking
-#    LOSS_HOLD_SEC .. LOSS_SEARCH_SEC    : assume transient (blur/occlusion) -> hover in place
-#    LOSS_SEARCH_SEC .. LOSS_ABORT_SEC   : marker likely out of frame -> slow scan rotation
-#    > LOSS_ABORT_SEC                   : give up -> zero output + land
-#  These are starting points, not measured values -- tune against how your
-#  own detector actually drops frames (occasional single-frame misses vs.
-#  the marker genuinely leaving the FOV) before trusting this on real flights.
-# ─────────────────────────────────────────────────────────────────────────────
+# Tracking-loss recovery timeline. No ML-based re-detection here -- ArUco
+# detection is a simple per-frame binary hit/miss, so recovery is a scripted,
+# timer-driven state machine rather than anything adaptive:
+#   < LOSS_HOLD_SEC                   : normal tracking
+#   LOSS_HOLD_SEC .. LOSS_SEARCH_SEC  : assume transient (blur/occlusion) -> hover in place
+#   LOSS_SEARCH_SEC .. LOSS_ABORT_SEC : marker likely out of frame -> slow scan rotation
+#   > LOSS_ABORT_SEC                  : give up -> zero output + land
+# These are starting points, not measured values -- tune against how your
+# own detector actually drops frames (occasional single-frame misses vs.
+# the marker genuinely leaving the FOV) before trusting this on real flights.
 LOSS_HOLD_SEC   = 2.0
 LOSS_SEARCH_SEC = 5.0
-LOSS_ABORT_SEC  = 12.0
-SEARCH_YAW_RATE = 0.20 # Twist.angular.z while scanning -- keep conservative, this is untested
+LOSS_ABORT_SEC  = 20.0
+SEARCH_YAW_RATE = 0.50  # Twist.angular.z while scanning -- keep conservative, this is untested
 
 
+# ─────────────────────────────────────────────────────────────────────────
+#  GEOMETRY HELPERS
+# ─────────────────────────────────────────────────────────────────────────
 
 def quaternion_to_rotation_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
     """Convert a quaternion [qx, qy, qz, qw] to a 3x3 rotation matrix."""
@@ -61,20 +93,9 @@ def compute_stand_off_goal(marker_pos: np.ndarray, R_marker: np.ndarray) -> np.n
     return marker_pos + R_marker @ local_offset
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  SINGLE-AXIS TEST CONTROLLER
-#
-#  Only ONE of x / y / z / yaw is ever commanded — the rest are forced to
-#  zero. This isolates one PID at a time for tuning (e.g. checking the
-#  pid_y altitude-hold fix in isolation) without interaction from the
-#  other axes or the coarse-yaw zone logic.
-#
-#  HOW TO SWITCH AXES:
-#  Exactly one block in control_loop() below should be UNCOMMENTED.
-#  Comment out the active block and uncomment a different one to switch.
-#  Everything else (UKF, locking, takeoff, safety halt) stays the same.
-# ─────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────────────────
+#  STATE ESTIMATION
+# ─────────────────────────────────────────────────────────────────────────
 
 class UKF_CTRV:
     """
@@ -167,6 +188,10 @@ class UKF_CTRV:
         self.P = 0.5 * (self.P + self.P.T)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+#  CONTROL
+# ─────────────────────────────────────────────────────────────────────────
+
 class PIDController:
     def __init__(self, kp, ki, kd, max_out, min_effective_out=0.0):
         self.kp = kp
@@ -203,22 +228,38 @@ class PIDController:
         return output
 
 
+# ─────────────────────────────────────────────────────────────────────────
+#  NODE
+# ─────────────────────────────────────────────────────────────────────────
+
 class SingleAxisTestController(Node):
+
+    # -- setup -------------------------------------------------------------
+
     def __init__(self):
         super().__init__('tello_single_axis_test')
 
-        self.pose_sub  = self.create_subscription(PoseStamped, '/tello/marker_pose', self.pose_callback, 10)
-        self.cmd_pub   = self.create_publisher(Twist, '/cmd_vel', 10)
+        self._init_pubs_subs()
+        self._init_debug_telemetry()
+        self._init_estimator_and_control()
+        self._init_state()
+
+        self.trigger_takeoff()
+
+    def _init_pubs_subs(self):
+        self.pose_sub    = self.create_subscription(PoseStamped, '/tello/marker_pose', self.pose_callback, 10)
+        self.cmd_pub     = self.create_publisher(Twist, '/cmd_vel', 10)
         self.takeoff_pub = self.create_publisher(Empty, '/tello/takeoff', 10)
+        self.land_pub    = self.create_publisher(Empty, '/tello/land', 10)
 
-        self.land_pub  = self.create_publisher(Empty, '/tello/land', 10)
-
+    def _init_debug_telemetry(self):
         # UKF's continuous-valued speed estimate, for comparing against the
         # integer-quantized /tello/velocity in PlotJuggler. UKF speed state is
         # metres/second (marker/vision frame); Tello telemetry is cm/s -- the
         # x100 below is an exact unit conversion so both plot on the same axis.
         self.velocity_estimate_pub = self.create_publisher(Vector3Stamped, '/tello/nav/velocity_estimate', 10)
         self.M_TO_CM = 100.0
+
         # UKF turn-rate state (omega) is rad/s; Tello's /tello/attitude reports
         # yaw in degrees. Converting here so both are directly comparable --
         # note the SDK has NO yaw-rate telemetry field, so this topic has no
@@ -226,39 +267,40 @@ class SingleAxisTestController(Node):
         self.yaw_rate_estimate_pub = self.create_publisher(Vector3Stamped, '/tello/nav/yaw_rate_estimate', 10)
         self.RAD_TO_DEG = 180.0 / np.pi
 
+    def _init_estimator_and_control(self):
         self.ukf = UKF_CTRV()
         self.last_time = self.get_clock().now()
 
         # min_effective_out is left at 0.0 (disabled) below. Measure the real
         # per-axis motor/RC deadband (smallest cmd_vel that produces visible
         # motion) and set it explicitly once known — see PIDController.compute().
-        self.pid_x    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
-
-        self.pid_y    = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.15)
-
-        self.pid_z    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
-        self.pid_yaw  = PIDController(kp=0.382,  ki=0.0637,  kd=0.100,  max_out=0.90, min_effective_out=0.10)
+        self.pid_x   = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
+        self.pid_y   = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.15)
+        self.pid_z   = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
+        self.pid_yaw = PIDController(kp=0.2547, ki=0.0283, kd=0.0669, max_out=0.90, min_effective_out=0.10)
         self._all_pids = [self.pid_x, self.pid_y, self.pid_z, self.pid_yaw]
 
         self.control_timer = self.create_timer(0.05, self.control_loop)
 
+    def _init_state(self):
         self.latest_goal = None
         self.last_measurement_time = self.get_clock().now()
         self.is_tracking_lost = True
 
-        self._recovery_state = 'TRACKING'  # TRACKING | HOLD | SEARCHING | ABORTED
-
+        self._recovery_state = 'TRACKING'          # TRACKING | HOLD | SEARCHING | ABORTED
+        self._flight_state = 'ALTITUDE_CALIBRATE'  # ALTITUDE_CALIBRATE | AXIS_TEST
+        self._altitude_settle_start_time = None
 
         self.current_zone = 'CENTER'
         self._locked_marker_id = None
-
-        self.trigger_takeoff()
 
     def trigger_takeoff(self):
         self.get_logger().info("Initializing automatic drone takeoff process...")
         time.sleep(1.2)
         self.takeoff_pub.publish(Empty())
         self.get_logger().info("Takeoff command published to /tello/takeoff!")
+
+    # -- perception ----------------------------------------------------------
 
     def pose_callback(self, msg: PoseStamped):
         current_time = self.get_clock().now()
@@ -304,26 +346,30 @@ class SingleAxisTestController(Node):
         self.ukf.update(z_measured)
         self.latest_goal = self.ukf.x[0:3]
 
-        # ── Publish continuous-valued velocity estimate ────────────────────────
+        self._publish_velocity_estimate(current_time)
+        self._publish_yaw_rate_estimate(current_time)
+
+    def _publish_velocity_estimate(self, stamp):
         # NOTE: speed relative to the marker (vision frame), not the drone's
-        # own body-frame velocity -- see M_TO_CM comment above for context.
+        # own body-frame velocity -- see M_TO_CM comment in _init_debug_telemetry.
         speed_m_s, heading_rad = self.ukf.x[3], self.ukf.x[4]
         velocity_estimate = Vector3Stamped()
-        velocity_estimate.header.stamp = current_time.to_msg()
+        velocity_estimate.header.stamp = stamp.to_msg()
         velocity_estimate.header.frame_id = 'marker'
         velocity_estimate.vector.x = speed_m_s * np.cos(heading_rad) * self.M_TO_CM
         velocity_estimate.vector.y = speed_m_s * np.sin(heading_rad) * self.M_TO_CM
         velocity_estimate.vector.z = 0.0  # CTRV model has no independent z-velocity state
         self.velocity_estimate_pub.publish(velocity_estimate)
 
-        # ── Publish continuous-valued yaw-rate estimate ────────────────────────
+    def _publish_yaw_rate_estimate(self, stamp):
         turn_rate_rad_s = self.ukf.x[5]
         yaw_rate_estimate = Vector3Stamped()
-        yaw_rate_estimate.header.stamp = current_time.to_msg()
+        yaw_rate_estimate.header.stamp = stamp.to_msg()
         yaw_rate_estimate.header.frame_id = 'marker'
         yaw_rate_estimate.vector.z = turn_rate_rad_s * self.RAD_TO_DEG
         self.yaw_rate_estimate_pub.publish(yaw_rate_estimate)
 
+    # -- tracking-loss recovery ------------------------------------------------
 
     def _handle_tracking_loss(self, time_since_last_meas: float) -> bool:
         """
@@ -334,11 +380,10 @@ class SingleAxisTestController(Node):
         """
         if time_since_last_meas > LOSS_ABORT_SEC:
             if self._recovery_state != 'ABORTED':
-                self.get_logger().error(
-                    f"Target lost for > {LOSS_ABORT_SEC}s. Landing."
-                )
+                self.get_logger().error(f"Target lost for > {LOSS_ABORT_SEC}s. Landing.")
                 self._recovery_state = 'ABORTED'
                 self.is_tracking_lost = True
+                self._flight_state = 'ALTITUDE_CALIBRATE'
             self.stop_drone()
             self.land_pub.publish(Empty())
             return True
@@ -351,6 +396,7 @@ class SingleAxisTestController(Node):
                 )
                 self._recovery_state = 'SEARCHING'
                 self.is_tracking_lost = True
+                self._flight_state = 'ALTITUDE_CALIBRATE'
             search_twist = Twist()
             search_twist.angular.z = SEARCH_YAW_RATE
             self.cmd_pub.publish(search_twist)
@@ -370,6 +416,7 @@ class SingleAxisTestController(Node):
         self._recovery_state = 'TRACKING'
         return False
 
+    # -- control loop --------------------------------------------------------
 
     def control_loop(self):
         if self.latest_goal is None:
@@ -382,74 +429,102 @@ class SingleAxisTestController(Node):
         time_since_last_meas = (now - self.last_measurement_time).nanoseconds / 1e9
         dt = 0.05
 
-
         if self._handle_tracking_loss(time_since_last_meas):
             return
-
-
 
         err_x = self.latest_goal[0]
         err_y = self.latest_goal[1]
         err_z = self.latest_goal[2]
 
+        if self._flight_state == 'ALTITUDE_CALIBRATE':
+            self._run_altitude_calibration(err_y, dt, now)
+            return
+
+        self._run_axis_test(err_x, err_y, err_z, dt)
+
+    def _run_altitude_calibration(self, err_y, dt, now):
+        """
+        FSM: ALTITUDE_CALIBRATE runs once, alone, like a calibration step.
+        Once settled, altitude is left alone for good (relies on the Tello's
+        own onboard hover/barometer hold) and control moves permanently to
+        AXIS_TEST -- no going back except on tracking loss.
+        """
+        altitude_twist = Twist()
+        altitude_twist.linear.z = -self.pid_y.compute(err_y, dt)
+        self.cmd_pub.publish(altitude_twist)
+
+        if abs(err_y) < ALTITUDE_SETTLE_TOL_M:
+            if self._altitude_settle_start_time is None:
+                self._altitude_settle_start_time = now
+            elif (now - self._altitude_settle_start_time).nanoseconds / 1e9 > ALTITUDE_SETTLE_HOLD_SEC:
+                self._flight_state = 'AXIS_TEST'
+                self.get_logger().info(
+                    "Altitude calibrated -- switching to AXIS_TEST, "
+                    "altitude no longer actively re-driven."
+                )
+                self.cmd_pub.publish(Twist())
+        else:
+            self._altitude_settle_start_time = None  # drifted back out, reset debounce
+
+    def _run_axis_test(self, err_x, err_y, err_z, dt):
+        """
+        ACTIVE AXIS SELECTION (AXIS_TEST state).
+        Exactly ONE block below should be uncommented at a time.
+        All other axes stay at 0.0 — only the active one moves the drone.
+        Altitude is intentionally NOT re-driven here -- it was calibrated
+        once in ALTITUDE_CALIBRATE and is left to the Tello's own hold.
+        """
         twist = Twist()
 
-        # ─────────────────────────────────────────────────────────────────
-        #  ACTIVE AXIS SELECTION
-        #  Exactly ONE block below should be uncommented at a time.
-        #  All other axes stay at 0.0 — only the active one moves the drone.
-        # ─────────────────────────────────────────────────────────────────
-
         # ── X AXIS (forward / back, pid_z, err_z) ──────────────────────────
-        twist.linear.x  = self.pid_z.compute(err_z, dt)
-        twist.linear.y  =0.0
-        #twist.linear.z =-self.pid_y.compute(err_y,dt)
-        #yaw_error = np.arctan2(err_x, err_z)        
-        #twist.angular.z = self.pid_yaw.compute(yaw_error,dt)
-        #self.pid_yaw.reset()
-        #self.pid_y.reset()
-        #self.pid_z.reset()
+        #twist.linear.x  = self.pid_z.compute(err_z, dt)
+        yaw_error = np.arctan2(err_x, err_z)
+        twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
+        # self.pid_yaw.reset()
+        # self.pid_y.reset()
+        # self.pid_z.reset()
 
         # ── Y AXIS (strafe left/right, pid_x, err_x) ────────────────────────
-        #twist.linear.x  = 0.0
-        #twist.linear.y  = self.pid_x.compute(err_x, dt)
-        #twist.linear.z  = 0.0
-        #twist.angular.z = 0.0
-        #self.pid_z.reset()
-        #self.pid_y.reset()
-        #self.pid_yaw.reset()
+        # twist.linear.x  = 0.0
+        # twist.linear.y  = self.pid_x.compute(err_x, dt)
+        # twist.linear.z  = 0.0
+        # twist.angular.z = 0.0
+        # self.pid_z.reset()
+        # self.pid_y.reset()
+        # self.pid_yaw.reset()
 
         # ── Z AXIS (altitude, pid_y, err_y) ─────────────────────────────────
-
-        #twist.linear.x  = 0.0
-        #twist.linear.y  = 0.0
-        #twist.linear.z  = -self.pid_y.compute(err_y, dt)
-        #twist.angular.z = 0.0
-        #self.pid_x.reset()
-        #self.pid_z.reset()
-        #self.pid_yaw.reset()
+        # twist.linear.x  = 0.0
+        # twist.linear.y  = 0.0
+        # twist.linear.z  = self.pid_y.compute(err_y, dt)
+        # twist.angular.z = 0.0
+        # self.pid_x.reset()
+        # self.pid_z.reset()
+        # self.pid_yaw.reset()
 
         # ── YAW AXIS (rotation, pid_yaw, err_tangential/err_radial) ─────────
-        #marker_heading = self.ukf.x[4]
-        #cos_h, sin_h   = np.cos(marker_heading), np.sin(marker_heading)
-        #err_tangential =  cos_h * err_x - sin_h * err_z  # lateral in marker frame
-        #err_radial     =  sin_h * err_x + cos_h * err_z  # depth   in marker frame
-        #yaw_error = np.arctan2(err_x, err_z)
-        #twist.linear.x  = 0.0
-        #twist.linear.y  = 0.0
-        #twist.linear.z  = 0.0
-        #twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
-        #self.pid_x.reset()
-        #self.pid_y.reset()
-        #self.pid_z.reset()
-
-        # ─────────────────────────────────────────────────────────────────
+        # marker_heading = self.ukf.x[4]
+        # cos_h, sin_h   = np.cos(marker_heading), np.sin(marker_heading)
+        # err_tangential =  cos_h * err_x - sin_h * err_z  # lateral in marker frame
+        # err_radial     =  sin_h * err_x + cos_h * err_z  # depth   in marker frame
+        # yaw_error = np.arctan2(err_x, err_z)
+        # twist.linear.x  = 0.0
+        # twist.linear.y  = 0.0
+        # twist.linear.z  = 0.0
+        # twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
+        # self.pid_x.reset()
+        # self.pid_y.reset()
+        # self.pid_z.reset()
 
         self.cmd_pub.publish(twist)
 
     def stop_drone(self):
         self.cmd_pub.publish(Twist())
 
+
+# ─────────────────────────────────────────────────────────────────────────
+#  ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────
 
 def main(args=None):
     rclpy.init(args=args)
