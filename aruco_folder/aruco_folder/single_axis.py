@@ -236,9 +236,7 @@ class SingleAxisTestController(Node):
 
         self.pid_y    = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.15)
 
-        self.pid_y    = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.10)
-
-        self.pid_z    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.0)
+        self.pid_z    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
         self.pid_yaw  = PIDController(kp=0.382,  ki=0.0637,  kd=0.100,  max_out=0.90, min_effective_out=0.10)
         self._all_pids = [self.pid_x, self.pid_y, self.pid_z, self.pid_yaw]
 
@@ -389,17 +387,6 @@ class SingleAxisTestController(Node):
             return
 
 
-        if time_since_last_meas > 5.0:
-            self.get_logger().error("Target lost for > 5.0 seconds. Safety halting drone.")
-            self.stop_drone()
-            return
-
-        #if time_since_last_meas > 1.0:
-         #   self.is_tracking_lost = True
-          #  self.ukf.predict(dt)
-           # self.latest_goal = self.ukf.x[0:3]
-            #self.current_zone = 'CENTER'
-
 
         err_x = self.latest_goal[0]
         err_y = self.latest_goal[1]
@@ -414,8 +401,8 @@ class SingleAxisTestController(Node):
         # ─────────────────────────────────────────────────────────────────
 
         # ── X AXIS (forward / back, pid_z, err_z) ──────────────────────────
-        #twist.linear.x  = self.pid_z.compute(err_z, dt)
-        #twist.linear.y  =0.0
+        twist.linear.x  = self.pid_z.compute(err_z, dt)
+        twist.linear.y  =0.0
         #twist.linear.z =-self.pid_y.compute(err_y,dt)
         #yaw_error = np.arctan2(err_x, err_z)        
         #twist.angular.z = self.pid_yaw.compute(yaw_error,dt)
@@ -434,22 +421,13 @@ class SingleAxisTestController(Node):
 
         # ── Z AXIS (altitude, pid_y, err_y) ─────────────────────────────────
 
-        twist.linear.x  = 0.0
-        twist.linear.y  = 0.0
-        twist.linear.z  = -self.pid_y.compute(err_y, dt)
-        twist.angular.z = 0.0
-        self.pid_x.reset()
-        self.pid_z.reset()
-        self.pid_yaw.reset()
-
         #twist.linear.x  = 0.0
         #twist.linear.y  = 0.0
-        twist.linear.z  = -self.pid_y.compute(err_y, dt)
+        #twist.linear.z  = -self.pid_y.compute(err_y, dt)
         #twist.angular.z = 0.0
         #self.pid_x.reset()
         #self.pid_z.reset()
         #self.pid_yaw.reset()
-
 
         # ── YAW AXIS (rotation, pid_yaw, err_tangential/err_radial) ─────────
         #marker_heading = self.ukf.x[4]
