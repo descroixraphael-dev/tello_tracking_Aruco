@@ -284,6 +284,11 @@ class SingleAxisTestController(Node):
 
     def _init_state(self):
         self.latest_goal = None
+        # Raw marker position (camera frame), NOT the stand-off goal below.
+        # Used for yaw bearing only -- translation control still targets
+        # latest_goal (the offset stand-off point). Unfiltered (no UKF),
+        # so expect it to be noisier frame-to-frame than latest_goal.
+        self.latest_marker_pos = None
         self.last_measurement_time = self.get_clock().now()
         self.is_tracking_lost = True
 
@@ -341,6 +346,11 @@ class SingleAxisTestController(Node):
         q = msg.pose.orientation
         R_marker = quaternion_to_rotation_matrix(q.x, q.y, q.z, q.w)
         z_measured = compute_stand_off_goal(marker_pos, R_marker)
+
+        # Keep the raw marker position around for yaw bearing (see
+        # latest_marker_pos comment in _init_state) -- this must be captured
+        # here, BEFORE the stand-off offset above shifts it.
+        self.latest_marker_pos = marker_pos
 
         self.ukf.predict(dt)
         self.ukf.update(z_measured)
@@ -419,7 +429,7 @@ class SingleAxisTestController(Node):
     # -- control loop --------------------------------------------------------
 
     def control_loop(self):
-        if self.latest_goal is None:
+        if self.latest_goal is None or self.latest_marker_pos is None:
             self.cmd_pub.publish(Twist())
             for pid in self._all_pids:
                 pid.reset()
@@ -432,15 +442,24 @@ class SingleAxisTestController(Node):
         if self._handle_tracking_loss(time_since_last_meas):
             return
 
+        # Stand-off goal errors -- drive translation (drone should stop at
+        # the offset point, not on top of the marker).
         err_x = self.latest_goal[0]
         err_y = self.latest_goal[1]
         err_z = self.latest_goal[2]
+
+        # Raw marker errors -- drive yaw bearing only. Using the marker's
+        # own x/z (instead of the goal's) means the drone points AT the
+        # marker regardless of the stand-off offset, which shifts x and z
+        # differently depending on how the marker itself is rotated.
+        marker_err_x = self.latest_marker_pos[0]
+        marker_err_z = self.latest_marker_pos[2]
 
         if self._flight_state == 'ALTITUDE_CALIBRATE':
             self._run_altitude_calibration(err_y, dt, now)
             return
 
-        self._run_axis_test(err_x, err_y, err_z, dt)
+        self._run_axis_test(err_x, err_y, err_z, marker_err_x, marker_err_z, dt)
 
     def _run_altitude_calibration(self, err_y, dt, now):
         """
@@ -466,19 +485,24 @@ class SingleAxisTestController(Node):
         else:
             self._altitude_settle_start_time = None  # drifted back out, reset debounce
 
-    def _run_axis_test(self, err_x, err_y, err_z, dt):
+    def _run_axis_test(self, err_x, err_y, err_z, marker_err_x, marker_err_z, dt):
         """
         ACTIVE AXIS SELECTION (AXIS_TEST state).
         Exactly ONE block below should be uncommented at a time.
         All other axes stay at 0.0 — only the active one moves the drone.
         Altitude is intentionally NOT re-driven here -- it was calibrated
         once in ALTITUDE_CALIBRATE and is left to the Tello's own hold.
+
+        err_x/err_y/err_z    : stand-off GOAL errors -- drive translation.
+        marker_err_x/_z      : raw MARKER errors -- drive yaw bearing only,
+                                so the drone faces the marker itself rather
+                                than the offset point it's translating to.
         """
         twist = Twist()
 
         # ── X AXIS (forward / back, pid_z, err_z) ──────────────────────────
         twist.linear.x  = self.pid_z.compute(err_z, dt)
-        yaw_error = np.arctan2(err_x, err_z)
+        yaw_error = np.arctan2(marker_err_x, marker_err_z)
         twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
         # self.pid_yaw.reset()
         # self.pid_y.reset()
@@ -503,7 +527,7 @@ class SingleAxisTestController(Node):
         # self.pid_yaw.reset()
 
         # ── YAW AXIS (rotation, pid_yaw, err_tangential/err_radial) ─────────
-        #yaw_error = np.arctan2(err_x, err_z)
+        #yaw_error = np.arctan2(marker_err_x, marker_err_z)
         #twist.linear.x  = 0.0
         # twist.linear.y  = 0.0
         # twist.linear.z  = 0.0
