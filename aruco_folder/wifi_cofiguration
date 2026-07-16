@@ -10,7 +10,7 @@ Before touching anything, understand what we're building:
 
     Your Desktop PC
     ├── Wi-Fi Adapter #1 (built-in)   ──────► Network A (e.g., Tello drone)
-    └── Wi-Fi Adapter #2 (USB dongle) ──────► Network B (e.g., second robot)
+    └── Wi-Fi Adapter #2 (USB dongle) ──────► Network B (e.g., Astro 4)
 
 You need TWO physical Wi-Fi adapters:
   - One built-in + one USB dongle, OR
@@ -135,7 +135,7 @@ PART 5 — ROS 2 CONFIGURATION
 
 YOUR NETWORK SUMMARY (confirmed):
   drone_a  →  IP: 192.168.10.2    gateway: 192.168.10.1   (Tello / Device A)
-  drone_b  →  IP: 192.168.8.163   gateway: 192.168.8.1    (Device B)
+  drone_b  →  IP: 192.168.8.163   gateway: 192.168.8.1    (Astro / sDevice B)
 
 ------------------------------------------------------------------------
 Understanding ROS 2 networking

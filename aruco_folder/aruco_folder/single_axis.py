@@ -502,8 +502,6 @@ class SingleAxisTestController(Node):
 
         # ── X AXIS (forward / back, pid_z, err_z) ──────────────────────────
         twist.linear.x  = self.pid_z.compute(err_z, dt)
-        yaw_error = np.arctan2(marker_err_x, marker_err_z)
-        twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
         # self.pid_yaw.reset()
         # self.pid_y.reset()
         # self.pid_z.reset()
