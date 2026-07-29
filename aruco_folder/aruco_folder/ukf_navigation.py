@@ -26,7 +26,7 @@ from std_msgs.msg import Empty
 #  marker itself is rotated on the floor.
 # ─────────────────────────────────────────────────────────────────────────────
 OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
-OFFSET_NORMAL_M = 0.45  # desired height above the marker (m)
+OFFSET_NORMAL_M = 0.35  # desired height above the marker (m)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Altitude-calibration settle criteria.

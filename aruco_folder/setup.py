@@ -32,7 +32,7 @@ setup(
         "aruco_detector=aruco_folder.aruco_detector:main",
         "driver_node=aruco_folder.driver_node:main",
         "navigation=aruco_folder.navigation:main",
-        "ufk_navigation=aruco_folder.ukf_navigation:main",
+        "ukf_navigation=aruco_folder.ukf_navigation:main",
         "yaw_control=aruco_folder.yaw_control:main",
         "keyboard_land=aruco_folder.keyboard_land:main",
         "tracker=aruco_folder.tracker:main",
