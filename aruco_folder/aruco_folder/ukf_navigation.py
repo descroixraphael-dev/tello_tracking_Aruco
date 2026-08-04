@@ -22,7 +22,7 @@ from std_msgs.msg import Empty
 #    +Z  →  pointing straight up into the ceiling.
 #    -Y  →  pointing backward along the ground towards the drone's parking spot.
 #  Applying this through the marker's measured rotation matrix means the
-#  drone holds 1m behind / 45cm above the marker regardless of how the
+#  drone holds 1m behind / 35cm above the marker regardless of how the
 #  marker itself is rotated on the floor.
 # ─────────────────────────────────────────────────────────────────────────────
 OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
@@ -290,7 +290,7 @@ class TelloNavigationController(Node):
         self.pid_x    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
         self.pid_y    = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.15)
         self.pid_z    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.15)
-        self.pid_yaw  = PIDController(kp=0.2547, ki=0.0283, kd=0.0669, max_out=0.90, min_effective_out=0.10)
+        self.pid_yaw  = PIDController(kp=0.2547, ki=0.0283, kd=0.0669, max_out=0.90, min_effective_out=0.15)
         self._all_pids = [self.pid_x, self.pid_y, self.pid_z, self.pid_yaw]
 
         # Tracking state
@@ -469,7 +469,12 @@ class TelloNavigationController(Node):
                 self.is_tracking_lost = True
                 self._flight_state = 'ALTITUDE_CALIBRATE'  # re-settle altitude on recovery
             search_twist = Twist()
-            search_twist.angular.z = SEARCH_YAW_RATE
+            # Scan in the same direction the marker was last drifting off
+            # (sign of the last yaw error), so the search turn continues
+            # the way it was already heading instead of risking a reversal
+            # away from where the marker actually went.
+            search_dir = 1.0 if self.last_yaw_error >= 0.0 else -1.0
+            search_twist.angular.z = search_dir * SEARCH_YAW_RATE
             self.cmd_pub.publish(search_twist)
             return True
 
@@ -531,6 +536,12 @@ class TelloNavigationController(Node):
         # relative to the camera.
         yaw_error = np.arctan2(marker_err_x, marker_err_z)
         twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
+
+        # Keep the trend tracker current every tick (not just on
+        # re-acquisition) so that if tracking is lost, SEARCHING starts
+        # from the most recent bearing sign, not a stale one from before
+        # the previous loss/recovery cycle.
+        self.last_yaw_error = yaw_error
 
         self.cmd_pub.publish(twist)
 
