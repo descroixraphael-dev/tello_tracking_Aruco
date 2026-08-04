@@ -57,146 +57,50 @@ Add `source ~/ros2_ws/install/setup.bash` to `~/.bashrc` for persistence.
 
 This stack talks to two robots on two separate subnets from one desktop (Tello on wlp0s20f3 / CycloneDDS / domain 10, ASTRO on wlx2887ba786c3c / Zenoh / domain 4).
 
-📄 See aruco_folder/wifi_cofiguration for the full setup, environment exports, and DHCP-lease caveats — steps below assume that guide has already been followed and both interfaces are configured.
-```
+📄 See aruco_folder/wifi_cofiguration.md for the full setup, environment exports, and DHCP-lease caveats — steps below assume that guide has already been followed and both interfaces are configured.
+
 
 ---
 
 ## 4. Node-Launch Protocols
 
-Each protocol assumes the workspace is sourced and the correct
-`ROS_DOMAIN_ID` / `RMW_IMPLEMENTATION` are exported in that terminal.
 
-### Protocol A — Tello Driver Only (bring-up / telemetry check)
 
+### Protocol A — ArUco Detection Only
+In one terminal write these line (don't forget to source your workspace)
 ```bash
-export ROS_DOMAIN_ID=10 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ros2 run <repo-name> driver_node
+ros-drone-a
+ros2 run aruco_folder driver_node
 ```
-Verify topics:
+in an other terminal:
 ```bash
-ros2 topic echo /tello/battery
-ros2 topic echo /tello/velocity
-ros2 topic echo /tello/attitude
+ros-drone-a
+ros2 run aruco_folder aruco_detector
 ```
 
-### Protocol B — ArUco Detection Only
+### Protocol B — Single-Axis Test (structural template / calibration)
+
+Use this if you want to tweak gains or debug some behavior, first do protocol A or the drone won't detect the marker
 
 ```bash
-ros2 run <repo-name> aruco_detector --ros-args -p marker_size:=0.10 -p camera_frame:=tello_camera
-```
-Verify:
-```bash
-ros2 topic echo /aruco/pose
+ros2 run aruco_folder single_axis
 ```
 
-### Protocol C — Single-Axis Test (structural template / calibration)
-
-Use this before full navigation to validate the two-phase flight FSM
-(`ALTITUDE_CALIBRATE` → `AXIS_TEST`) and PID gains on one axis at a time.
+### Protocol C — Full Autonomous Tracking 
 
 ```bash
-ros2 run <repo-name> single_axis --ros-args -p axis:=x -p target_distance:=1.0
+ros2 launch aruco_folder ctrm_launch
 ```
-
-### Protocol D — Full Autonomous Tracking (CTRV UKF + PID FSM)
-
-```bash
-ros2 launch <repo-name> tello_bringup.launch.py
-```
-This brings up, in order: `driver_node` → `aruco_detector` → `ukf_navigation`.
-The tracking-loss FSM engages automatically:
-- **HOLD** at 2 s of lost marker
-- **SEARCHING** (slow yaw scan) at 5 s
-- **ABORTED → land** if not recovered
-
-### Protocol E — Orbit Mode
-
-```bash
-ros2 run <repo-name> orbit_nav --ros-args -p radius:=1.5 -p angular_speed:=0.3
-```
-
-### Protocol F — Marker-Based Drift-Free Odometry
-
-Chains ASTRO's map-frame localization with ArUco detections to compute Tello
-position without integration drift. Requires ASTRO's localization stack
-already running on domain 4.
-
-```bash
-ros2 run <repo-name> tello_odom_publisher
-```
-
-> Before running: confirm ASTRO's actual `base_frame` name from the live TF
-> tree (`base_link` vs `base_footprint` inconsistency has been seen in
-> `nav2_params.yaml`):
-> ```bash
-> ros2 run tf2_tools view_frames    # (on ASTRO domain, ROS_DOMAIN_ID=4)
-> ```
 
 ---
 
-## 5. Launching the Full Cooperative Stack
-
-The combined stack spans **three ROS graphs** (Tello domain 10, ASTRO domain 4,
-and a bridged visualization domain) connected via `domain_bridge`. Full
-protocol is in `docs/tello_astro_rviz_protocol.md`.
-
-**Terminal 1 — ASTRO (domain 4, Zenoh):**
-```bash
-export ROS_DOMAIN_ID=4 RMW_IMPLEMENTATION=rmw_zenoh_cpp
-ros2 launch astro_bringup slam.launch.py
-```
-> Confirm `enable_interactive_mode: false` in `mapper_params_online_async.yaml`
-> — if `true`, `slam_toolbox` starts paused and never publishes `/map`.
-> Also confirm `sllidar_ros2` is launched (not started by default in the
-> ASTRO repo) and that `robot_base_frame` matches across `nav2_params.yaml`.
-
-**Terminal 2 — Tello (domain 10, CycloneDDS):**
-```bash
-export ROS_DOMAIN_ID=10 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ros2 launch <repo-name> tello_bringup.launch.py
-```
-
-**Terminal 3 — Domain Bridge:**
-```bash
-ros2 run domain_bridge domain_bridge config/domain_bridge.yaml
-```
-
-**Terminal 4 — Combined RViz2 visualization:**
-```bash
-export ROS_DOMAIN_ID=<bridge_domain>
-ros2 launch <repo-name> tello_astro_rviz.launch.py
-```
-
-### Five-Phase Integration Protocol (cooperative exploration + aerial following)
-
-1. ASTRO SLAM + frontier exploration bring-up, verify `/map` publishing
-2. Tello bring-up + ArUco lock-on over ASTRO's marker
-3. Dual-domain bridge + combined RViz verification
-4. Joint run: ASTRO explores autonomously, Tello tracks via UKF nav
-5. Fault-injection pass: marker occlusion, Wi-Fi drop, in-place rotation
-   during frontier selection (**highest-risk case for the CTRV UKF** — test
-   explicitly before calling integration done)
 
 ---
 
-## 6. Quick Troubleshooting Reference
-
-| Symptom | Likely Cause |
-|---|---|
-| `/map` never publishes | `enable_interactive_mode: true` in slam_toolbox params |
-| Nav2 can't find robot pose | `robot_base_frame` mismatch (`base_link` vs `base_footprint`) |
-| No lidar data | `sllidar_ros2` driver not launched independently |
-| Tello nodes lose discovery mid-session | DHCP lease expired, IP changed — recheck CycloneDDS peer config |
-| UKF yaw jumps/oscillates during rotation | In-place rotation edge case — known high-risk CTRV failure mode |
-| Domain bridge shows no topics | Domain IDs / RMW implementation mismatch between terminals |
-
----
-
-## 7. Requirements
+## 5. Requirements
 
 - ROS 2 (Humble or later recommended)
 - `rmw_cyclonedds_cpp`, `rmw_zenoh_cpp`
 - Python: `djitellopy`, `opencv-python`, `opencv-contrib-python` (ArUco), `filterpy` or custom UKF
 - `domain_bridge`
-- ASTRO stack (CRTA-Lab), `slam_toolbox`, `sllidar_ros2`, Nav2
+- ASTRO stack (CRTA-Lab) or any robot stack, `slam_toolbox`, `sllidar_ros2`, Nav2
