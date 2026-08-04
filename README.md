@@ -25,7 +25,7 @@ cd ~/ros2_ws/src
 
 ```bash
 cd ~/ros2_ws/src
-git clone <git-remote-url> <repo-name>
+git clone [<git-remote-url> <repo-name>](https://github.com/descroixraphael-dev/tello_tracking_Aruco.git)
 cd <repo-name>
 git submodule update --init --recursive   # if ArUco/UKF deps are submodules
 ```
