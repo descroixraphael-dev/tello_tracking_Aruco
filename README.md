@@ -25,9 +25,7 @@ cd ~/ros2_ws/src
 
 ```bash
 cd ~/ros2_ws/src
-git clone [<git-remote-url> <repo-name>](https://github.com/descroixraphael-dev/tello_tracking_Aruco.git)
-cd <repo-name>
-git submodule update --init --recursive   # if ArUco/UKF deps are submodules
+git clone https://github.com/descroixraphael-dev/tello_tracking_Aruco.git
 ```
 
 Install Python/ROS dependencies:
@@ -36,6 +34,11 @@ Install Python/ROS dependencies:
 cd ~/ros2_ws
 rosdep install --from-paths src --ignore-src -r -y
 pip install -r src/<repo-name>/requirements.txt   # djitellopy, opencv-python, filterpy, etc.
+```
+If pip is not installed install it:
+```bash
+sudo apt update
+sudo python3-pip
 ```
 
 Build:
@@ -52,31 +55,9 @@ Add `source ~/ros2_ws/install/setup.bash` to `~/.bashrc` for persistence.
 
 ## 3. Network Setup (Dual Wi-Fi: Tello + ASTRO)
 
-This stack talks to two robots on two separate subnets from one desktop.
-Full details live in `docs/ros2_dual_wifi_guide.txt`; summary:
+This stack talks to two robots on two separate subnets from one desktop (Tello on wlp0s20f3 / CycloneDDS / domain 10, ASTRO on wlx2887ba786c3c / Zenoh / domain 4).
 
-| Robot | Interface        | Middleware | ROS_DOMAIN_ID |
-|-------|-------------------|------------|----------------|
-| Tello | `wlp0s20f3`       | CycloneDDS | 10             |
-| ASTRO | `wlx2887ba786c3c` | Zenoh      | 4              |
-
-```bash
-# Terminal reserved for Tello nodes
-export ROS_DOMAIN_ID=10
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI=file:///path/to/cyclonedds_tello.xml   # binds wlp0s20f3
-
-# Terminal reserved for ASTRO nodes
-export ROS_DOMAIN_ID=4
-export RMW_IMPLEMENTATION=rmw_zenoh_cpp     # or your Zenoh RMW of choice
-```
-
-**Known risk:** the Tello's DHCP lease is short — if its IP changes, the
-CycloneDDS peer config for `wlp0s20f3` must be updated or discovery breaks.
-Verify the Tello's current IP before each session:
-
-```bash
-nmcli device show wlp0s20f3 | grep IP4.ADDRESS
+📄 See docs/ros2_dual_wifi_guide.txt for the full setup, environment exports, and DHCP-lease caveats — steps below assume that guide has already been followed and both interfaces are configured.
 ```
 
 ---
