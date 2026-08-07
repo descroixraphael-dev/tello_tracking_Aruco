@@ -43,7 +43,7 @@ from std_msgs.msg import Empty
 # drone holds 1m behind / 45cm above the marker regardless of how the
 # marker itself is rotated on the floor.
 OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
-OFFSET_NORMAL_M = 0.45  # desired height above the marker (m)
+OFFSET_NORMAL_M = 0.35  # desired height above the marker (m)
 
 # Altitude-calibration settle criteria (see FLIGHT SEQUENCE above).
 #   ALTITUDE_SETTLE_TOL_M   : how close err_y must get to call it "settled" (m)
@@ -277,7 +277,7 @@ class SingleAxisTestController(Node):
         self.pid_x   = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
         self.pid_y   = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.15)
         self.pid_z   = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
-        self.pid_yaw = PIDController(kp=0.2547, ki=0.0283, kd=0.0669, max_out=0.50, min_effective_out=0.10)
+        self.pid_yaw = PIDController(kp=0.2547, ki=0.0283, kd=0.0669, max_out=0.50, min_effective_out=0.18)
         self._all_pids = [self.pid_x, self.pid_y, self.pid_z, self.pid_yaw]
 
         self.control_timer = self.create_timer(0.05, self.control_loop)
@@ -525,14 +525,14 @@ class SingleAxisTestController(Node):
         # self.pid_yaw.reset()
 
         # ── YAW AXIS (rotation, pid_yaw, err_tangential/err_radial) ─────────
-        #yaw_error = np.arctan2(marker_err_x, marker_err_z)
-        #twist.linear.x  = 0.0
-        # twist.linear.y  = 0.0
-        # twist.linear.z  = 0.0
-        #twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
-        # self.pid_x.reset()
-        # self.pid_y.reset()
-        # self.pid_z.reset()
+        yaw_error = np.arctan2(marker_err_x, marker_err_z)
+        twist.linear.x  = 0.0
+        twist.linear.y  = 0.0
+        twist.linear.z  = 0.0
+        twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
+        self.pid_x.reset()
+        self.pid_y.reset()
+        self.pid_z.reset()
 
         self.cmd_pub.publish(twist)
 

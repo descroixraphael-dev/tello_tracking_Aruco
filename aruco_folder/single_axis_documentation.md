@@ -543,5 +543,20 @@ Standard ROS 2 entry point: initializes rclpy, spins the node, and on
 shutdown (including `KeyboardInterrupt`) calls `stop_drone()` before
 destroying the node.
 
+
+
+### PID_values:
+the pid values for conservative or fast control:
+1. 
+self.pid_x    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90,min_effective_out=0.15)
+self.pid_y    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.15)
+self.pid_z    = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.15)
+self.pid_yaw  = PIDController(kp=0.2547, ki=0.0283, kd=0.0669, max_out=0.90, min_effective_out=0.18)
+2. 
+self.pid_x    = PIDController(kp=0.0735, ki=0.01081, kd=0.0219, max_out=0.90, min_effective_out=0.15)
+self.pid_y    = PIDController(kp=0.0735, ki=0.01081, kd=0.0219, max_out=0.90, min_effective_out=0.15)
+self.pid_z    = PIDController(kp=0.0676, ki=0.00913, kd=0.0219, max_out=0.90, min_effective_out=0.15)
+self.pid_yaw  = PIDController(kp=0.382,  ki=0.0637,  kd=0.100,  max_out=0.90, min_effective_out=0.18)
+
 ---
 
