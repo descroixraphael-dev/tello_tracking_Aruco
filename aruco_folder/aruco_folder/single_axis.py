@@ -501,7 +501,7 @@ class SingleAxisTestController(Node):
         twist = Twist()
 
         # ── X AXIS (forward / back, pid_z, err_z) ──────────────────────────
-        twist.linear.x  = self.pid_z.compute(err_z, dt)
+        # twist.linear.x  = self.pid_z.compute(err_z, dt)
         # self.pid_yaw.reset()
         # self.pid_y.reset()
         # self.pid_z.reset()
