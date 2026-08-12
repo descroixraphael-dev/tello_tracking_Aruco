@@ -5,6 +5,7 @@ from geometry_msgs.msg import Twist, Vector3Stamped
 from std_msgs.msg import Empty, Int32
 from cv_bridge import CvBridge
 from djitellopy import Tello
+from rclpy.qos import qos_profile_sensor_data
 import cv2
 
 # ---------------------------------------------------------------------------
@@ -30,8 +31,16 @@ class TelloDriverNode(Node):
         # existing one -- that was silently leaking threads at 30Hz.
         self.frame_reader = self.tello.get_frame_read()
 
+        # Tracks the last frame buffer object published, so publish_video()
+        # can skip re-publishing a frame that hasn't actually changed yet
+        # (the background reader thread does not run at a fixed 30Hz).
+        self._last_frame_id = None
+
         self.bridge = CvBridge()
-        self.image_pub = self.create_publisher(Image, '/tello/image_raw', 10)
+        # Sensor-data QoS (best-effort, depth 1): if the subscriber falls
+        # behind, old frames get dropped instead of queued up, so the
+        # display always shows the latest frame instead of playing catch-up.
+        self.image_pub = self.create_publisher(Image, '/tello/image_raw', qos_profile_sensor_data)
         self.battery_pub = self.create_publisher(Int32, '/tello/battery', 10)
         self.altitude_pub = self.create_publisher(Int32, '/tello/altitude', 10)
 
@@ -68,8 +77,18 @@ class TelloDriverNode(Node):
 
     def publish_video(self):
         frame = self.frame_reader.frame
-        if frame is not None:
-            self.image_pub.publish(self.bridge.cv2_to_imgmsg(frame, "bgr8"))
+        if frame is None:
+            return
+
+        # BackgroundFrameRead swaps in a new buffer object each time it
+        # decodes a frame, so identity comparison is enough to detect
+        # "no new frame since last timer tick" without a content diff.
+        frame_id = id(frame)
+        if frame_id == self._last_frame_id:
+            return
+        self._last_frame_id = frame_id
+
+        self.image_pub.publish(self.bridge.cv2_to_imgmsg(frame, "bgr8"))
 
     def retrieve_flight_data(self):
         # 1. Pull the data packet from the Tello Wi-Fi client

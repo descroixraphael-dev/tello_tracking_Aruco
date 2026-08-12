@@ -5,7 +5,7 @@ from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import qos_profile_sensor_data
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  This node now reports the marker's own pose (position + orientation) only.
@@ -61,7 +61,10 @@ class ArUcoDetectorNode(Node):
         self.target_marker_id = self.get_parameter('target_marker_id').get_parameter_value().integer_value
         self.get_logger().info(f"Detector filtering active. Only processing Marker ID: {self.target_marker_id}")
         
-        self.sub = self.create_subscription(Image, '/tello/image_raw', self.img_cb, 10)
+        # Matches the publisher's sensor-data QoS: best-effort, depth 1, so a
+        # slower detection loop drops old frames instead of processing a
+        # growing backlog (which is what made the imshow feed feel laggy).
+        self.sub = self.create_subscription(Image, '/tello/image_raw', self.img_cb, qos_profile_sensor_data)
         self.pose_pub = self.create_publisher(PoseStamped, '/tello/marker_pose', 10)
 
         # Camera Matrix (Standard Tello 720p optics)
@@ -170,16 +173,15 @@ def main():
     rclpy.init()
     node = ArUcoDetectorNode()
     
-    executor = MultiThreadedExecutor()
-    executor.add_node(node)
-    
     try:
-        executor.spin()
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
+        cv2.destroyAllWindows()
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

@@ -113,7 +113,7 @@ class UKF_CTRV:
         self.Q = np.diag([0.05, 0.05, 0.05, 0.1, 0.05, 0.05])
         self.R = np.diag([0.02, 0.02, 0.02])
 
-        self.alpha = 1e-3
+        self.alpha = 0.1
         self.kappa = 0.0
         self.beta = 2.0
         self.lambda_ = (self.alpha**2) * (self.num_states + self.kappa) - self.num_states

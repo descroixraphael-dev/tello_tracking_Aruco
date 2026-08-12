@@ -94,7 +94,7 @@ class UKF_CTRV:
     _R_DIAG = [0.002, 0.002, 0.002]
 
     # UKF spreading parameters (van der Merwe defaults)
-    _ALPHA = 1e-3
+    _ALPHA = 0.1
     _KAPPA = 0.0
     _BETA  = 2.0
 
@@ -237,11 +237,7 @@ class PIDController:
 
         output_unclamped = self.kp * error + self.ki * self.integral + self.kd * derivative
         output = np.clip(output_unclamped, -self.max_out, self.max_out)
-
-        # Anti-windup
-        if self.ki and output != output_unclamped:
-            self.integral -= error * dt
-
+        
         # Deadband compensation
         if 0.0 < abs(output) < self.min_effective_out:
             output = self.min_effective_out * np.sign(output)
@@ -290,7 +286,7 @@ class TelloNavigationController(Node):
         self.pid_x    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.10)
         self.pid_y    = PIDController(kp=0.0450, ki=0.0041, kd=0.0146, max_out=0.90, min_effective_out=0.15)
         self.pid_z    = PIDController(kp=0.0490, ki=0.0048, kd=0.0146, max_out=0.90, min_effective_out=0.15)
-        self.pid_yaw  = PIDController(kp=0.2547, ki=0.0283, kd=0.0669, max_out=0.90, min_effective_out=0.1)
+        self.pid_yaw  = PIDController(kp=0.2547, ki=0.0283, kd=0.0669, max_out=0.90, min_effective_out=0.18)
         self._all_pids = [self.pid_x, self.pid_y, self.pid_z, self.pid_yaw]
 
         # Tracking state
