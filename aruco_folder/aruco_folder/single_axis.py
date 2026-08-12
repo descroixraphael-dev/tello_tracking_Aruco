@@ -217,10 +217,6 @@ class PIDController:
         output_unclamped = self.kp * error + self.ki * self.integral + self.kd * derivative
         output = np.clip(output_unclamped, -self.max_out, self.max_out)
 
-        # Anti-windup
-        if self.ki and output != output_unclamped:
-            self.integral -= error * dt
-
         # Deadband compensation
         if 0.0 < abs(output) < self.min_effective_out:
             output = self.min_effective_out * np.sign(output)
