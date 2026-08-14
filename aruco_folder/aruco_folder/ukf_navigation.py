@@ -25,7 +25,7 @@ from std_msgs.msg import Empty
 #  drone holds 1m behind / 35cm above the marker regardless of how the
 #  marker itself is rotated on the floor.
 # ─────────────────────────────────────────────────────────────────────────────
-OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
+OFFSET_TOWARD_M = 1.50   # desired stand-off distance behind the marker (m)
 OFFSET_NORMAL_M = 0.35  # desired height above the marker (m)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +230,9 @@ class PIDController:
         self.last_error = 0.0
 
     def compute(self, error, dt):
+        if self.last_error != 0.0 and np.sign(error) != np.sign(self.last_error):
+            self.integral=0.0
+        
         self.integral += error * dt
 
         derivative = (error - self.last_error) / dt if dt > 0 else 0.0
@@ -237,6 +240,9 @@ class PIDController:
 
         output_unclamped = self.kp * error + self.ki * self.integral + self.kd * derivative
         output = np.clip(output_unclamped, -self.max_out, self.max_out)
+        
+        self.last_error=error
+        
         
         # Deadband compensation
         if 0.0 < abs(output) < self.min_effective_out:

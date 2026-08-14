@@ -209,6 +209,9 @@ class PIDController:
         self.last_error = 0.0
 
     def compute(self, error, dt):
+        if self.last_error != 0.0 and np.sign(error) != np.sign(self.last_error):
+            self.integral=0.0
+        
         self.integral += error * dt
 
         derivative = (error - self.last_error) / dt if dt > 0 else 0.0
@@ -216,7 +219,10 @@ class PIDController:
 
         output_unclamped = self.kp * error + self.ki * self.integral + self.kd * derivative
         output = np.clip(output_unclamped, -self.max_out, self.max_out)
-
+        
+        self.last_error=error
+        
+        
         # Deadband compensation
         if 0.0 < abs(output) < self.min_effective_out:
             output = self.min_effective_out * np.sign(output)
@@ -497,10 +503,10 @@ class SingleAxisTestController(Node):
         twist = Twist()
 
         # ── X AXIS (forward / back, pid_z, err_z) ──────────────────────────
-        # twist.linear.x  = self.pid_z.compute(err_z, dt)
-        # self.pid_yaw.reset()
-        # self.pid_y.reset()
-        # self.pid_z.reset()
+        twist.linear.x  = self.pid_z.compute(err_z, dt)
+        self.pid_yaw.reset()
+        self.pid_y.reset()
+        self.pid_z.reset()
 
         # ── Y AXIS (strafe left/right, pid_x, err_x) ────────────────────────
         # twist.linear.x  = 0.0
@@ -521,14 +527,14 @@ class SingleAxisTestController(Node):
         # self.pid_yaw.reset()
 
         # ── YAW AXIS (rotation, pid_yaw, err_tangential/err_radial) ─────────
-        yaw_error = np.arctan2(marker_err_x, marker_err_z)
-        twist.linear.x  = 0.0
-        twist.linear.y  = 0.0
-        twist.linear.z  = 0.0
-        twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
-        self.pid_x.reset()
-        self.pid_y.reset()
-        self.pid_z.reset()
+        #yaw_error = np.arctan2(marker_err_x, marker_err_z)
+        #twist.linear.x  = 0.0
+        #twist.linear.y  = 0.0
+        #twist.linear.z  = 0.0
+        #twist.angular.z = self.pid_yaw.compute(yaw_error, dt)
+        #self.pid_x.reset()
+        #self.pid_y.reset()
+        #self.pid_z.reset()
 
         self.cmd_pub.publish(twist)
 
