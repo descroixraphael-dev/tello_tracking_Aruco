@@ -85,6 +85,10 @@ Use this if you want to tweak gains or debug some behavior, first do protocol A 
 ```bash
 ros2 run aruco_folder single_axis
 ```
+or do this
+```bash
+ros2 launch aruco_folder cvm_launch.py
+```
 
 ### Protocol C — Full Autonomous Tracking 
 
