@@ -57,7 +57,7 @@ Add `source ~/ros2_ws/install/setup.bash` to `~/.bashrc` for persistence.
 
 This stack talks to two robots on two separate subnets from one desktop (Tello on wlp0s20f3 / CycloneDDS / domain 10, ASTRO on wlx2887ba786c3c / Zenoh / domain 4).
 
-📄 See aruco_folder/wifi_cofiguration.md for the full setup, environment exports, and DHCP-lease caveats — steps below assume that guide has already been followed and both interfaces are configured.
+📄 See aruco_folder/docstring/wifi_cofiguration.md for the full setup, environment exports, and DHCP-lease caveats — steps below assume that guide has already been followed and both interfaces are configured.
 
 
 ---
