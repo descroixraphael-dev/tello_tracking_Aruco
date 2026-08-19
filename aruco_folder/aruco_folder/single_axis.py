@@ -43,7 +43,7 @@ from std_msgs.msg import Empty
 # drone holds 1m behind / 45cm above the marker regardless of how the
 # marker itself is rotated on the floor.
 OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
-OFFSET_NORMAL_M = 0.45  # desired height above the marker (m)
+OFFSET_NORMAL_M = 0.35  # desired height above the marker (m)
 
 # Altitude-calibration settle criteria (see FLIGHT SEQUENCE above).
 #   ALTITUDE_SETTLE_TOL_M   : how close err_y must get to call it "settled" (m)
@@ -98,10 +98,15 @@ def compute_stand_off_goal(marker_pos: np.ndarray, R_marker: np.ndarray) -> np.n
     of horizontal distance even when the marker hasn't physically moved.
     Keeping it world-frame makes the altitude goal depend only on
     marker_pos.y and a fixed offset, regardless of range or tilt noise.
+
+    Sign note: this pose frame is Y-down (consistent with the existing
+    control law's `linear.z = -pid_y.compute(err_y, dt)`), so "above the
+    marker" means a MORE NEGATIVE Y value -- hence subtracting
+    OFFSET_NORMAL_M here, not adding it.
     """
     local_offset_horizontal = np.array([0.0, -OFFSET_TOWARD_M, 0.0])
     goal = marker_pos + R_marker @ local_offset_horizontal
-    goal[1] += OFFSET_NORMAL_M
+    goal[1] -= OFFSET_NORMAL_M  # Y-down frame: "above" the marker = more negative Y
     return goal
 
 
