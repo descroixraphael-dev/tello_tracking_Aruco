@@ -43,7 +43,7 @@ from std_msgs.msg import Empty
 # drone holds 1m behind / 45cm above the marker regardless of how the
 # marker itself is rotated on the floor.
 OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
-OFFSET_NORMAL_M = 0.35  # desired height above the marker (m)
+OFFSET_NORMAL_M = 0.45  # desired height above the marker (m)
 
 # Altitude-calibration settle criteria (see FLIGHT SEQUENCE above).
 #   ALTITUDE_SETTLE_TOL_M   : how close err_y must get to call it "settled" (m)
@@ -84,13 +84,25 @@ def quaternion_to_rotation_matrix(qx: float, qy: float, qz: float, qw: float) ->
 def compute_stand_off_goal(marker_pos: np.ndarray, R_marker: np.ndarray) -> np.ndarray:
     """
     Given the marker's measured position and rotation matrix (camera frame),
-    return the desired drone hold position: OFFSET_TOWARD_M behind and
-    OFFSET_NORMAL_M above the marker, along the marker's own local axes.
+    return the desired drone hold position: OFFSET_TOWARD_M behind the
+    marker along its own local axes, and OFFSET_NORMAL_M straight up in
+    world frame.
     Same as orbit_nav.py / ukf_navigation.py, so this benchmark targets the
     same goal point the real controller flies to.
+
+    NOTE: OFFSET_NORMAL_M is applied AFTER rotation (world-frame Y), not as
+    part of local_offset run through R_marker. Routing it through R_marker
+    couples the altitude goal to the marker's apparent tilt -- which grows
+    with solvePnP noise at range and with viewing-angle/perspective changes
+    as distance changes -- so the altitude target would drift as a function
+    of horizontal distance even when the marker hasn't physically moved.
+    Keeping it world-frame makes the altitude goal depend only on
+    marker_pos.y and a fixed offset, regardless of range or tilt noise.
     """
-    local_offset = np.array([0.0, -OFFSET_TOWARD_M, OFFSET_NORMAL_M])
-    return marker_pos + R_marker @ local_offset
+    local_offset_horizontal = np.array([0.0, -OFFSET_TOWARD_M, 0.0])
+    goal = marker_pos + R_marker @ local_offset_horizontal
+    goal[1] += OFFSET_NORMAL_M
+    return goal
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -111,7 +123,7 @@ class UKF_CTRV:
         self.P = np.eye(self.num_states) * 1.0
 
         self.Q = np.diag([0.05, 0.05, 0.05, 0.1, 0.05, 0.05])
-        self.R = np.diag([0.02, 0.02, 0.02])
+        self.R = np.diag([0.002, 0.002, 0.002])
 
         self.alpha = 0.1
         self.kappa = 0.0
@@ -157,6 +169,16 @@ class UKF_CTRV:
 
             out[:, i] = [px_next, py_next, pz_next, v, theta + omega * dt, omega]
         return out
+
+    def reinitialise(self, position: np.ndarray) -> None:
+        """
+        Hard-reset the filter to a known position.
+        Called on target re-acquisition to prevent stale drift from causing
+        a position 'snap' when the first fresh measurement arrives.
+        """
+        self.x[:3] = position
+        self.x[3:] = 0.0                        # zero velocity, heading, turn-rate
+        self.P = np.eye(self.num_states) * 0.05  # tight initial uncertainty
 
     def predict(self, dt):
         self.dt = dt
@@ -330,13 +352,6 @@ class SingleAxisTestController(Node):
         self.last_time = current_time
         self.last_measurement_time = current_time
 
-        if self.is_tracking_lost:
-            for pid in self._all_pids:
-                pid.reset()
-            self.get_logger().info("Target re-acquired — PID integrals reset.")
-
-        self.is_tracking_lost = False
-
         # Raw marker pose (camera frame) → same 1m-behind/45cm-above stand-off
         # goal that orbit_nav.py / ukf_navigation.py fly to, so this benchmark
         # is tuning against the same target the real controller uses.
@@ -353,6 +368,20 @@ class SingleAxisTestController(Node):
         # latest_marker_pos comment in _init_state) -- this must be captured
         # here, BEFORE the stand-off offset above shifts it.
         self.latest_marker_pos = marker_pos
+
+        if self.is_tracking_lost:
+            # Reinitialise UKF directly from the fresh measurement so that
+            # free-running drift (during lost period) does not cause a
+            # position 'snap' when the first fresh measurement arrives.
+            # Matches ukf_navigation.py's re-acquisition behavior so this
+            # bench tunes against the same estimator dynamics as the real
+            # controller.
+            self.ukf.reinitialise(z_measured)
+            for pid in self._all_pids:
+                pid.reset()
+            self.get_logger().info("Target re-acquired — UKF reset.")
+
+        self.is_tracking_lost = False
 
         self.ukf.predict(dt)
         self.ukf.update(z_measured)

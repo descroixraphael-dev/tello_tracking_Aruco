@@ -26,7 +26,7 @@ from std_msgs.msg import Empty
 #  marker itself is rotated on the floor.
 # ─────────────────────────────────────────────────────────────────────────────
 OFFSET_TOWARD_M = 1.50   # desired stand-off distance behind the marker (m)
-OFFSET_NORMAL_M = 0.35  # desired height above the marker (m)
+OFFSET_NORMAL_M = 0.45  # desired height above the marker (m)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Altitude-calibration settle criteria.
@@ -68,11 +68,23 @@ def quaternion_to_rotation_matrix(qx: float, qy: float, qz: float, qw: float) ->
 def compute_stand_off_goal(marker_pos: np.ndarray, R_marker: np.ndarray) -> np.ndarray:
     """
     Given the marker's measured position and rotation matrix (camera frame),
-    return the desired drone hold position: OFFSET_TOWARD_M behind and
-    OFFSET_NORMAL_M above the marker, along the marker's own local axes.
+    return the desired drone hold position: OFFSET_TOWARD_M behind the
+    marker along its own local axes, and OFFSET_NORMAL_M straight up in
+    world frame.
+
+    NOTE: OFFSET_NORMAL_M is applied AFTER rotation (world-frame Y), not as
+    part of local_offset run through R_marker. Routing it through R_marker
+    couples the altitude goal to the marker's apparent tilt -- which grows
+    with solvePnP noise at range and with viewing-angle/perspective changes
+    as distance changes -- so the altitude target would drift as a function
+    of horizontal distance even when the marker hasn't physically moved.
+    Keeping it world-frame makes the altitude goal depend only on
+    marker_pos.y and a fixed offset, regardless of range or tilt noise.
     """
-    local_offset = np.array([0.0, -OFFSET_TOWARD_M, OFFSET_NORMAL_M])
-    return marker_pos + R_marker @ local_offset
+    local_offset_horizontal = np.array([0.0, -OFFSET_TOWARD_M, 0.0])
+    goal = marker_pos + R_marker @ local_offset_horizontal
+    goal[1] += OFFSET_NORMAL_M
+    return goal
 
 
 # ──────────────────────────────────────────────────────────────────────────────
