@@ -11,7 +11,7 @@ tuned and observed without interference from the other three.
 1. **`ALTITUDE_CALIBRATE`** — `pid_y` alone drives to the target height, once,
    like a calibration step. Once settled (within tolerance, for a debounce
    hold time), altitude is handed off to the Tello's own onboard
-   hover/barometer hold and is never actively re-driven by this node.
+   hover/barometer hold.
 2. **`AXIS_TEST`** — whichever single-axis block is uncommented in
    `_run_axis_test()` runs, with altitude no longer commanded by this node.
 
@@ -56,7 +56,7 @@ a time — this file is a bench, not a flight-ready controller.
 | `LOSS_HOLD_SEC` | `2.0` | Below this, tracking is normal. Between this and `LOSS_SEARCH_SEC`: assume transient occlusion/blur — hover in place. |
 | `LOSS_SEARCH_SEC` | `5.0` | Above this (and below `LOSS_ABORT_SEC`): marker likely out of frame — rotate slowly to scan for it. |
 | `LOSS_ABORT_SEC` | `20.0` | Above this: give up — zero output and land. |
-| `SEARCH_YAW_RATE` | `0.50` | `Twist.angular.z` used while scanning in the `SEARCHING` state. Conservative default — untested, tune against real detector dropout behavior before trusting on real flights. |
+| `SEARCH_YAW_RATE` | `0.50` | `Twist.angular.z` used while scanning in the `SEARCHING` state. Conservative default. |
 
 `OFFSET_TOWARD_M` and `OFFSET_NORMAL_M` are combined inside
 `compute_stand_off_goal` (see below): `OFFSET_TOWARD_M` is rotated into the
