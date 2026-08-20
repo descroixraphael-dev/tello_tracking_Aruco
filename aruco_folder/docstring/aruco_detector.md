@@ -6,8 +6,7 @@ for that marker's 3D pose (position + orientation) relative to the camera,
 and publishes it as a PoseStamped message.
 
 It deliberately does not compute any stand-off/goal-point offset — that
-logic lives downstream in the navigation nodes (orbit_nav.py,
-ukf_navigation.py, single_axis.py), since those are the places where the
+logic lives downstream in the navigation nodes (ukf_navigation.py, single_axis.py), since those are the places where the
 marker's orientation gets combined with the desired stand-off distance. This
 node's only job is: find the marker, report exactly where and how it's
 oriented, nothing more.
@@ -49,14 +48,14 @@ with this ID are processed; everything else is ignored.
 - Subscribes to **/tello/image_raw**, publishes **PoseStamped** on
 **/tello/marker_pose**.
 
-- Camera intrinsics (self.k, self.d): a hardcoded camera matrix
+- Camera intrinsics (self.k, self.d): a hard-coded camera matrix
 calibrated for "standard Tello 720p optics" (focal length ≈730px, principal
 point at (640, 360)), with zero distortion coefficients (self.d) — i.e.
 the model assumes the Tello's lens distortion is negligible or
 pre-corrected elsewhere.
 
 - self.marker_size = 0.15 — the physical side length of the ArUco marker,
-in metres. This must match the real printed marker exactly, since
+in meters. This must match the real printed marker exactly, since
 solvePnP's scale comes entirely from this value.
 
 - self.img_w, self.img_h — image dimensions, initialized to 1280×720 but
@@ -83,9 +82,6 @@ Debug/visualization only:
 its center.
 - Labels the zone text next to the marker, colored green if CENTER,
 orange otherwise.
-- The comment notes that the virtual stand-off goal is intentionally not
-visualized here anymore, since that computation now lives downstream.
-
 
 **img_cb(self, msg)**
 
