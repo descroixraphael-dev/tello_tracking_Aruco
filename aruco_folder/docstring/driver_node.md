@@ -36,8 +36,7 @@ Name | Value | Meaning
 video stream (**streamon()**).
 
 - **self.frame_reader = self.tello.get_frame_read()** — grabbed exactly
-once here. The comment explains why this matters: calling
-get_frame_read() repeatedly (e.g. from inside a timer callback) spins up
+once here. Calling get_frame_read() repeatedly (e.g. from inside a timer callback) spins up
 a brand-new background thread every single call instead of reusing the
 existing reader — a thread leak that would compound at 30 Hz. Grabbing it
 once in __init__ and reusing self.frame_reader.frame in
@@ -147,8 +146,7 @@ the Tello's body-frame RC convention, and it's not automatically the
 same as the camera-frame X/Y/Z convention used in aruco_detector.py and
 the nav nodes (camera X = lateral, Y = altitude, Z = depth/forward). The
 nav nodes are responsible for mapping their camera-frame errors onto the
-correct Twist fields before publishing — any mismatch there (as seen in
-earlier debugging of single_axis.py) will surface here as the drone
+correct Twist fields before publishing — any mismatch there will surface here as the drone
 moving in an unexpected direction, even though this file itself is a
 faithful, mechanical translation of whatever Twist it receives.
 
