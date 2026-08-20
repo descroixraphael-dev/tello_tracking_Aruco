@@ -40,7 +40,7 @@ from std_msgs.msg import Empty
 #     +Z  →  pointing straight up into the ceiling.
 #     -Y  →  pointing backward along the ground towards the drone's parking spot.
 # Applying this through the marker's measured rotation matrix means the
-# drone holds 1m behind / 45cm above the marker regardless of how the
+# drone holds 1m behind / 35cm above the marker regardless of how the
 # marker itself is rotated on the floor.
 OFFSET_TOWARD_M = 1.0   # desired stand-off distance behind the marker (m)
 OFFSET_NORMAL_M = 0.35  # desired height above the marker (m)
